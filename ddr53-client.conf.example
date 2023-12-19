@@ -1,0 +1,16 @@
+[DEFAULT]
+ttl = 60
+http = http://169.254.169.254/latest/meta-data/public-ipv4
+zoneid = Z9643874QIJJ218DC9YU
+
+[test1.domain.com]
+enabled = true
+use = http
+zoneid = Z9643874QIJJ218DC9YU
+
+[test2.domain.com]
+enabled = true
+ttl = 120
+; use the ip from test1.domain.com
+use = test1.domain.com
+
