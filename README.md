@@ -18,16 +18,36 @@ The configuration file is located at `/etc/ddr53/ddr53.conf` and is a simple INI
 
 ### Configuration options
 All configuration options can be set in the `[DEFAULT]` section and overridden in the hostname-specific sections.
+  - `hostname`: The hostname to update. This is specified in the section header.
   - `enabled`: Enable or disable the DDNS record. Defaults to `True`.
-  - `hostname`: The hostname to update. This is the only required option.
   - `ttl`: The TTL for the record. Defaults to 60.
   - `zoneid`: The Route53 zone ID. Defaults to the zone ID of the hostname.
   - `access_key`: The AWS access key ID. Default: `None`.
   - `secret_key`: The AWS secret access key. Default: `None`.
-  - `profile`: The AWS CLI prodile. Defaults to the value of the environment variable `AWS_PROFILE`.
-  - `region`: The AWS region. Defaults to the value of the environment variable `AWS_REGION`.
+  - `profile`: The AWS CLI prodile. Default: `None`.
+  - `region`: The AWS region. Default: `None`.
   - `http_accept`: The HTTP Accept header. Defaults to `text/plain`.
   - `json_key`: The JSON key to use for the IP address. Default: `None`. Only used if the HTTP Accept header is `application/json`.
   - `use`: Specify the source to use for the IP address. Defaults to `http`. Valid values are `http` and `cmd` or another hostname specified in the config.
   - `http`: The URL to use for the HTTP source. Defaults to `http://ipinfo.io/ip`. Only used if `use` is set to `http`. Specify `http://169.254.169.254/latest/meta-data/public-ipv4` for EC2 instance metadata.
   - `cmd`: The command to use for the command source. Default: `None`. Only used if `use` is set to `cmd`.
+
+### Example
+```ini
+[DEFAULT]
+ttl = 60
+http = http://169.254.169.254/latest/meta-data/public-ipv4
+zoneid = Z9643874QIJJ218DC9YU
+
+[test1.domain1.com]
+enabled = true
+use = http
+
+
+[test2.domain2.com]
+enabled = true
+ttl = 120
+zoneid = 8G743874WL1J256WC9RP
+; use the ip from test1.domain1.com
+use = test1.domain1.com
+```
