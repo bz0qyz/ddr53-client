@@ -12,8 +12,11 @@ on:
 
 jobs:
   security-scan:
-    uses: bz0qyz/gh-actions/.github/actions/aikido-security@main
-    with:
-      github-token: ${{ secrets.AIKIDO_GITHUB_TOKEN }}
-      aikido-secret-key: ${{ secrets.AIKIDO_SECRET_KEY }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Detect new vulnerabilities
+        uses: bz0qyz/gh-actions/.github/actions/aikido-security@main
+        with:
+          github-token: ${{ secrets.AIKIDO_GITHUB_TOKEN }}
+          aikido-secret-key: ${{ secrets.AIKIDO_SECRET_KEY }}
 
