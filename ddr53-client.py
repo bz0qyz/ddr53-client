@@ -13,12 +13,20 @@ import ipaddress
 import subprocess
 
 APP_NAME = "ddr53-client"
-APP_VERSION = "0.0.1"
+APP_VERSION = "0.0.2"
 CONFIG_FILES = ['/etc/ddr53-client.conf', os.path.expanduser('~/.ddr53-client.conf')]
 LOG_ROTATION = {
     "maxBytes": 500000,
     "backupCount": 7
 }
+CMD_BLACKLIST = [
+    "systemctl",
+    "shutdown",
+    "reboot",
+    "poweroff",
+    "halt",
+    "init"
+]
 
 
 """ Argument Parsing """
@@ -94,6 +102,12 @@ class DdnsConfig():
         for key, val in config_defaults.items():
             if hasattr(self, key):
                 setattr(self, key, self.__str_to_bool__(val))
+
+        # Verify that the cmd is not blacklisted
+        if self.cmd and any([cmd in self.cmd for cmd in CMD_BLACKLIST]):
+            self.logger.error(f"Command '{self.cmd}' is blacklisted. Exiting.")
+            self.enabled = False
+
         # Set config values (overwrites defaults)
         for key, val in config_entry.items():
             if hasattr(self, key):
