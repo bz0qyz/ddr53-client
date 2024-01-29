@@ -25,7 +25,19 @@ CMD_BLACKLIST = [
     "reboot",
     "poweroff",
     "halt",
-    "init"
+    "init",
+    "service"
+]
+CMD_WHITE_LIST = [
+    "curl",
+    "wget",
+    "fetch",
+    "cat",
+    "dig",
+    "nslookup",
+    "host",
+    "ip",
+    "ifconfig"
 ]
 
 
@@ -188,6 +200,12 @@ class DdnsConfig():
         """ Get the public IP address from a command """
         run_cmd = None
         self.logger.info(f"Getting public IP from CMD for '{self.hostname}'")
+
+        # Verify that the cmd is whitelisted
+        if self.cmd and not any([cmd in self.cmd for cmd in CMD_WHITE_LIST]):
+            self.logger.error(f"Command '{self.cmd}' is not whitelisted. Exiting.")
+            self.enabled = False
+            return None
 
         # Verify that the cmd is not blacklisted
         if self.cmd and any([cmd in self.cmd for cmd in CMD_BLACKLIST]):
