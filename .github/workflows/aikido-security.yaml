@@ -1,0 +1,19 @@
+name: Aikido Security Scan
+on:
+    push:
+        branches:
+        - main
+        - release/*
+    pull_request:
+        branches:
+        - main
+        - release/*
+    workflow_dispatch:
+
+jobs:
+  security-scan:
+    uses: bz0qyz/gh-actions/.github/actions/aikido-security@main
+    with:
+      github-token: ${{ secrets.AIKIDO_GITHUB_TOKEN }}
+      aikido-secret-key: ${{ secrets.AIKIDO_SECRET_KEY }}
+
