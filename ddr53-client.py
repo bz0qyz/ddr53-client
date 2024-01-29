@@ -186,6 +186,7 @@ class DdnsConfig():
 
     def __cmd_public_ip__(self):
         """ Get the public IP address from a command """
+        run_cmd = None
         self.logger.info(f"Getting public IP from CMD for '{self.hostname}'")
 
         # Verify that the cmd is not blacklisted
@@ -193,9 +194,12 @@ class DdnsConfig():
             self.logger.error(f"Command '{self.cmd}' is blacklisted. Exiting.")
             self.enabled = False
             return None
+        else:
+            self.logger.debug(f"Running command: {self.cmd}")
+            run_cmd = self.cmd
 
         try:
-            response = subprocess.run(self.cmd, shell=True, capture_output=True)
+            response = subprocess.run(run_cmd, shell=True, capture_output=True)
             if response.returncode == 0:
                 return str(ipaddress.ip_address(response.stdout.decode('utf-8').strip()))
             else:
