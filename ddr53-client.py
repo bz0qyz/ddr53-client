@@ -213,6 +213,7 @@ class DdnsConfig():
     def __cmd_public_ip__(self):
         """ Get the public IP address from a command """
         self.logger.info(f"Getting public IP from CMD for '{self.hostname}'")
+        # Verify that the command is safe to run
         run_cmd = self.__validate_cmd__(self.cmd)
         if not run_cmd:
             return None
