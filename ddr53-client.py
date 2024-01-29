@@ -161,7 +161,7 @@ class DdnsConfig():
         """ Get the public IP address from a web service """
         self.logger.info(f"Getting public IP from HTTP for '{self.hostname}'")
         try:
-            response = requests.get(self.http, headers={"Accept": f"{self.http_accept}"}, verify=False)
+            response = requests.get(self.http, headers={"Accept": f"{self.http_accept}"}, verify=True)
             if response.status_code == 200:
                 if self.http_accept.endswith('json') and self.json_key:
                     self.logger.debug("Parsing HTTP JSON response")
