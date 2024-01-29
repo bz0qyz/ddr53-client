@@ -103,11 +103,6 @@ class DdnsConfig():
             if hasattr(self, key):
                 setattr(self, key, self.__str_to_bool__(val))
 
-        # Verify that the cmd is not blacklisted
-        if self.cmd and any([cmd in self.cmd for cmd in CMD_BLACKLIST]):
-            self.logger.error(f"Command '{self.cmd}' is blacklisted. Exiting.")
-            self.enabled = False
-
         # Set config values (overwrites defaults)
         for key, val in config_entry.items():
             if hasattr(self, key):
@@ -192,6 +187,13 @@ class DdnsConfig():
     def __cmd_public_ip__(self):
         """ Get the public IP address from a command """
         self.logger.info(f"Getting public IP from CMD for '{self.hostname}'")
+
+        # Verify that the cmd is not blacklisted
+        if self.cmd and any([cmd in self.cmd for cmd in CMD_BLACKLIST]):
+            self.logger.error(f"Command '{self.cmd}' is blacklisted. Exiting.")
+            self.enabled = False
+            return None
+
         try:
             response = subprocess.run(self.cmd, shell=True, capture_output=True)
             if response.returncode == 0:
