@@ -196,25 +196,26 @@ class DdnsConfig():
             self.logger.error(f"Error getting public IP: {err}")
             return None
 
-    def __cmd_public_ip__(self):
-        """ Get the public IP address from a command """
-        run_cmd = None
-        self.logger.info(f"Getting public IP from CMD for '{self.hostname}'")
-
+    def __validate_cmd__(self, command:str):
+        """ Validate a command string """
         # Verify that the cmd is whitelisted
-        if self.cmd and not any([cmd in self.cmd for cmd in CMD_WHITE_LIST]):
-            self.logger.error(f"Command '{self.cmd}' is not whitelisted. Exiting.")
-            self.enabled = False
+        if command and not any([cmd in command for cmd in CMD_WHITE_LIST]):
+            self.logger.error(f"Command '{command}' is not whitelisted. Exiting.")
             return None
 
         # Verify that the cmd is not blacklisted
-        if self.cmd and any([cmd in self.cmd for cmd in CMD_BLACKLIST]):
-            self.logger.error(f"Command '{self.cmd}' is blacklisted. Exiting.")
-            self.enabled = False
+        if command and any([cmd in command for cmd in CMD_BLACKLIST]):
+            self.logger.error(f"Command '{command}' is blacklisted. Exiting.")
             return None
-        else:
-            self.logger.debug(f"Running command: {self.cmd}")
-            run_cmd = self.cmd
+
+        return command
+
+    def __cmd_public_ip__(self):
+        """ Get the public IP address from a command """
+        self.logger.info(f"Getting public IP from CMD for '{self.hostname}'")
+        run_cmd = self.__validate_cmd__(self.cmd)
+        if not run_cmd:
+            return None
 
         try:
             response = subprocess.run(run_cmd, shell=True, capture_output=True)
