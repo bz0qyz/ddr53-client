@@ -3,6 +3,7 @@ Dynamic DNS client for Route53
 
 ## Usage
 ddr53-client is a simple client for updating Route53 DNS records. It can be used to update a single record or multiple records at once.
+Optionally, it can be used to update a security group rule with the new IP address.
 
 ### Arguments
   - `-c|--config`: The path to the configuration file. Defaults to `/etc/ddr53/ddr53.conf`.
@@ -22,6 +23,8 @@ All configuration options can be set in the `[DEFAULT]` section and overridden i
   - `enabled`: Enable or disable the DDNS record. Defaults to `True`.
   - `ttl`: The TTL for the record. Defaults to 60.
   - `zoneid`: The Route53 zone ID. Defaults to the zone ID of the hostname.
+  - `sgroupid`: security group id. Defaults to `None`.
+  - `sgruleid`:  security group rule id. Defaults to `None`.
   - `access_key`: The AWS access key ID. Default: `None`.
   - `secret_key`: The AWS secret access key. Default: `None`.
   - `profile`: The AWS CLI prodile. Default: `None`.

@@ -7,6 +7,8 @@ zoneid = Z9643874QIJJ218DC9YU
 enabled = true
 use = http
 zoneid = Z9643874QIJJ218DC9YU
+sgroupid = sg-014865abe355fb579
+sgruleid = sgr-023f1fe423f24268e
 
 [test2.domain.com]
 enabled = true
