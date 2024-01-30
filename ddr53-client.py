@@ -5,6 +5,7 @@ import json
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 import boto3
+import botocore
 import logging
 from logging.handlers import RotatingFileHandler
 import argparse
@@ -13,8 +14,8 @@ import ipaddress
 import subprocess
 
 APP_NAME = "ddr53-client"
-APP_VERSION = "0.0.2"
-CONFIG_FILES = ['/etc/ddr53-client.conf', os.path.expanduser('~/.ddr53-client.conf')]
+APP_VERSION = "1.0.0"
+CONFIG_FILES = [f"{os.path.dirname(os.path.realpath(__file__))}/ddr53-client.conf", '/etc/ddr53-client.conf', os.path.expanduser('~/.ddr53-client.conf')]
 LOG_ROTATION = {
     "maxBytes": 500000,
     "backupCount": 7
@@ -63,6 +64,11 @@ parser.add_argument(
     help='No console logging',
     action='store_true'
 )
+parser.add_argument(
+    '-d','--dry-run', required=False,
+    help='Report only, do not update DNS',
+    action='store_true'
+)
 args = parser.parse_args()
 config = configparser.ConfigParser()
 DdnsConfigs = {}
@@ -91,11 +97,58 @@ logging.getLogger('botocore').setLevel(logging.CRITICAL)
 logging.getLogger('boto3').setLevel(logging.CRITICAL)
 requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
+class SgRule():
+    def __init__(self, hostname:str, **kwargs):
+        self.SecurityGroupRuleId = None
+        self.IpProtocol = None
+        self.FromPort = None
+        self.ToPort = None
+        self.CidrIpv4 = None
+        self.CidrIpv6 = None
+
+        for key, val in kwargs.items():
+            if hasattr(self, key):
+                setattr(self, key, val)
+
+        self.Description = f"{APP_NAME} - {hostname}"
+
+    @property
+    def ip(self):
+        if self.CidrIpv4:
+            return str(ipaddress.ip_network(self.CidrIpv4).network_address)
+        elif self.CidrIpv6:
+            return str(ipaddress.ip_network(self.CidrIpv6).network_address)
+    @ip.setter
+    def ip(self, value):
+        if self.CidrIpv4:
+            self.CidrIpv4 = f"{value}/32"
+        elif self.CidrIpv6:
+            self.CidrIpv6 = f"{value}/128"
+
+    def update_payload(self):
+        out_dict = {
+            'SecurityGroupRuleId': self.SecurityGroupRuleId,
+            'SecurityGroupRule': {
+                'IpProtocol': self.IpProtocol,
+                'FromPort': self.FromPort,
+                'ToPort': self.ToPort,
+                'Description': self.Description
+            }
+        }
+        if self.CidrIpv4:
+            out_dict['SecurityGroupRule']['CidrIpv4'] = self.CidrIpv4
+        if self.CidrIpv6:
+            out_dict['SecurityGroupRule']['CidrIpv6'] = self.CidrIpv6
+        return out_dict
+
 class DdnsConfig():
     def __init__(self, hostname:str, config_entry, config_defaults):
         self.enabled = True
         self.hostname = hostname
         self.zoneid = None
+        self.sgroupid = None
+        self.sgruleid = None
+        self.sgrule = None
         self.use = 'http'
         self.http = 'http://ipinfo.io/ip'
         self.cmd = None
@@ -137,14 +190,31 @@ class DdnsConfig():
             self.enabled = False
 
         if self.route53 and self.zoneid and self.hostname:
-            self.logger.info(f"Connected to AWS Route53 API")
             self.dns_public_ip = self.__get_route53_ip__(self.zoneid, self.hostname)
         if self.dns_public_ip:
             self.logger.info(f"Found Existing Route53 DNS IP Address: {self.dns_public_ip} for '{self.hostname}'")
 
+        if self.sgroupid and self.sgruleid:
+            self.ec2 = self.__aws_client__('ec2')
+            if not self.ec2:
+                self.logger.error(f"Unable to connect to AWS EC2 API")
+                self.enabled = False
+            if self.ec2 and self.sgroupid and self.sgruleid:
+                self.sgrule = self.__get_sg_rule__(self.sgroupid, self.sgruleid)
+            if self.sgrule:
+                self.logger.info(f"Found Existing Security Group IP Address: {self.sgrule.ip} for '{self.hostname}'")
+
+
     @property
-    def in_sync(self):
+    def dns_in_sync(self):
         return self.public_ip == self.dns_public_ip
+
+    @property
+    def sg_in_sync(self):
+        if self.sgrule:
+            return self.public_ip == self.sgrule.ip
+        else:
+            return None
 
     @property
     def ready(self):
@@ -162,7 +232,7 @@ class DdnsConfig():
         else:
             return value
 
-    def __aws_client__(self):
+    def __aws_client__(self, client:str='route53'):
         # Create a session object
         credentials = {
             "aws_access_key_id": self.access_key,
@@ -176,7 +246,9 @@ class DdnsConfig():
         except:
             self.logger.error(f"Unable to authenticate AWS session. Check your credentials.")
             return None
-        return session.client('route53')
+
+        self.logger.debug(f"Connected to AWS API using client: {client}")
+        return session.client(client)
 
     def __http_public_ip__(self):
         """ Get the public IP address from a web service """
@@ -228,6 +300,44 @@ class DdnsConfig():
             self.logger.error(f"Error getting public IP: {err}")
             return None
 
+    def __get_sg_rule__(self, group_id:str, rule_id:str):
+        """ Get the public IP address from a security group rule """
+        self.logger.info(f"Getting public IP from Security Group for '{self.hostname}'")
+        try:
+            response = self.ec2.describe_security_group_rules(
+                Filters=[{'Name': 'group-id', 'Values': [group_id]}],
+                SecurityGroupRuleIds=[rule_id]
+            )
+            if response["SecurityGroupRules"] and len(response["SecurityGroupRules"]) > 0:
+                return SgRule(hostname=self.hostname, **response["SecurityGroupRules"][0])
+        except botocore.exceptions.ClientError as err:
+            self.logger.error(f"Error getting public IP from Security Group: {err}")
+            return None
+        except ValueError as err:
+            self.logger.error(f"Error getting public IP from Security Group: {err}")
+            return None
+
+    def __set_sg_rule_ip__(self, group_id:str, rule_id:str, public_ip:str, dry_run:bool=False):
+        """ Set the public IP address in a security group rule """
+        if dry_run:
+            self.logger.info(f"DRY RUN: Updating Security Group for {self.hostname} to {self.public_ip}")
+            return True
+
+        self.logger.info(f"Setting public IP in Security Group for '{self.hostname}'")
+        self.sgrule.ip = public_ip
+
+        try:
+            response = self.ec2.modify_security_group_rules(
+                DryRun=dry_run,
+                GroupId=group_id,
+                SecurityGroupRules=[self.sgrule.update_payload()]
+            )
+            return True
+        except botocore.exceptions.ClientError as err:
+            self.logger.error(f"Error updating Security Group: {err}")
+            return False
+
+
     def __get_route53_ip__(self, zone_id:str, hostname:str):
         """ Get the public IP address from Route53 """
         self.logger.info(f"Getting DNS IP from Route53 for {self.hostname}")
@@ -247,12 +357,17 @@ class DdnsConfig():
                     break
         return dns_public_ip
 
-    def update(self):
+    def __set_route53_ip__(self, zone_id:str, hostname:str, public_ip:str, dry_run:bool=False):
+        """ Set the public IP address in Route53 """
+        if dry_run:
+            self.logger.info(f"DRY RUN: Updating DNS for {self.hostname} to {self.public_ip}")
+            return True
+
         try:
             response = self.route53.change_resource_record_sets(
                 HostedZoneId=self.zoneid,
                 ChangeBatch={
-                    'Comment': 'string',
+                    'Comment': f"{APP_NAME} Updating {self.hostname} to {self.public_ip}",
                     'Changes': [
                         {
                             'Action': 'UPSERT',
@@ -270,9 +385,34 @@ class DdnsConfig():
                     ]
                 }
             )
+            return True
         except Exception as err:
             self.logger.error(f"Error updating Route53: {err}")
             return False
+
+    def update(self, dry_run:bool=False):
+        # Update the DNS record if needed
+        if self.ready and not self.dns_in_sync:
+            self.logger.info(f"Updating DNS for {self.hostname} to {self.public_ip}")
+            if ddns_config.__set_route53_ip__(self.zoneid, self.hostname, self.public_ip, dry_run=dry_run):
+                self.logger.info(f"DNS for {self.hostname} successfully updated to {self.public_ip}")
+        else:
+            self.logger.info(f"Public IP for {self.hostname} is in sync with DNS. No update needed.")
+
+        # Update the Security Group rule if needed
+        if ddns_config.sg_in_sync == None:
+            self.logger.debug(f"No security group rule configured to update for {self.hostname}")
+
+        elif ddns_config.ready and not ddns_config.sg_in_sync:
+            self.logger.info(f"Updating Security Group for {self.hostname} to {self.public_ip}")
+            if ddns_config.__set_sg_rule_ip__(self.sgroupid, self.sgruleid, f"{self.public_ip}", dry_run=dry_run):
+                self.logger.info(f"Security Group for {self.hostname} successfully updated to {self.public_ip}")
+        else:
+            self.logger.info(f"Public IP for {self.hostname} is in sync with {self.sgroupid}. No update needed.")
+
+
+
+
 
 
 logger.info(f"** Starting {APP_NAME} version {APP_VERSION} **")
@@ -303,12 +443,5 @@ for hostname, ddns_config in DdnsConfigs.items():
     if ddns_config.use in DdnsConfigs.keys() and DdnsConfigs[ddns_config.use].public_ip:
         ddns_config.public_ip = DdnsConfigs[ddns_config.use].public_ip
 
-    # print(ddns_config.__dict__)
-    if ddns_config.ready and not ddns_config.in_sync:
-        logger.info(f"Updating DNS for {ddns_config.hostname} to {ddns_config.public_ip}")
-        ddns_config.update()
-    elif ddns_config.ready and ddns_config.in_sync:
-        logger.info(f"Public IP for {ddns_config.hostname} is in sync with DNS. No update needed.")
-    else:
-        logger.error(f"One or more operations for {ddns_config.hostname} failed. Unable to update DNS.")
-        continue
+    ddns_config.update(dry_run=args.dry_run)
+
