@@ -14,7 +14,7 @@ import ipaddress
 import subprocess
 
 APP_NAME = "ddr53-client"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 CONFIG_FILES = [f"{os.path.dirname(os.path.realpath(__file__))}/ddr53-client.conf", '/etc/ddr53-client.conf', os.path.expanduser('~/.ddr53-client.conf')]
 LOG_ROTATION = {
     "maxBytes": 500000,
@@ -83,7 +83,7 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 console_format = logging.Formatter(
-    f'[%(levelname)-1s]: %(message)s',
+    '[%(levelname)-1s]: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger()
@@ -186,7 +186,7 @@ class DdnsConfig():
 
         self.route53 = self.__aws_client__()
         if not self.route53:
-            self.logger.error(f"Unable to connect to AWS Route53 API")
+            self.logger.error("Unable to connect to AWS Route53 API")
             self.enabled = False
 
         if self.route53 and self.zoneid and self.hostname:
@@ -197,7 +197,7 @@ class DdnsConfig():
         if self.sgroupid and self.sgruleid:
             self.ec2 = self.__aws_client__('ec2')
             if not self.ec2:
-                self.logger.error(f"Unable to connect to AWS EC2 API")
+                self.logger.error("Unable to connect to AWS EC2 API")
                 self.enabled = False
             if self.ec2 and self.sgroupid and self.sgruleid:
                 self.sgrule = self.__get_sg_rule__(self.sgroupid, self.sgruleid)
@@ -243,19 +243,28 @@ class DdnsConfig():
         sts = session.client('sts')
         try:
             sts.get_caller_identity()
-        except:
-            self.logger.error(f"Unable to authenticate AWS session. Check your credentials.")
+        except exception as err:
+            self.logger.error(f"Unable to authenticate AWS session. Check your credentials. {err}")
             return None
 
         self.logger.debug(f"Connected to AWS API using client: {client}")
         return session.client(client)
 
-    def __http_public_ip__(self):
+    def __http_public_ip__(self, metadata_token=None):
         """ Get the public IP address from a web service """
         self.logger.info(f"Getting public IP from HTTP for '{self.hostname}'")
         try:
-            response = requests.get(self.http, headers={"Accept": f"{self.http_accept}"}, verify=True)
-            if response.status_code == 200:
+            headers = {"Accept": f"{self.http_accept}"}
+            if metadata_token:
+                self.logger.debug("Using ec2 metadata token")
+                headers["X-aws-ec2-metadata-token"] = metadata_token
+            response = requests.get(self.http, headers=headers, verify=True)
+
+            if response.status_code == 401 and self.http.startswith('http://169.254.169.254') and not metadata_token:
+                self.logger.debug("Requesting ec2 metadata token")
+                metadata_token = requests.put("http://169.254.169.254/latest/api/token", headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"}, verify=True)
+                return self.__http_public_ip__(metadata_token=metadata_token.text)
+            elif response.status_code == 200:
                 if self.http_accept.endswith('json') and self.json_key:
                     self.logger.debug("Parsing HTTP JSON response")
                     return str(ipaddress.ip_address(response.json()[self.json_key]))
@@ -327,7 +336,7 @@ class DdnsConfig():
         self.sgrule.ip = public_ip
 
         try:
-            response = self.ec2.modify_security_group_rules(
+            self.ec2.modify_security_group_rules(
                 DryRun=dry_run,
                 GroupId=group_id,
                 SecurityGroupRules=[self.sgrule.update_payload()]
@@ -385,7 +394,8 @@ class DdnsConfig():
                     ]
                 }
             )
-            return True
+            return True if response.status_code == 200 else False
+
         except Exception as err:
             self.logger.error(f"Error updating Route53: {err}")
             return False
@@ -429,7 +439,7 @@ for config_file in CONFIG_FILES:
             DdnsConfigs[f"{hostname}"] = DdnsConfig(hostname=hostname, config_entry=config[hostname], config_defaults=config['DEFAULT'])
         break
 if len(DdnsConfigs) == 0:
-    logger.error(f"No configuration found. Exiting.")
+    logger.error("No configuration found. Exiting.")
     exit(1)
 
 
