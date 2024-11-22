@@ -1,24 +1,43 @@
 #!/usr/local/bin/python3.11
 
 import os
-import json
+import sys
+import signal
 import requests
 from requests.packages.urllib3.exceptions import InsecureRequestWarning
 import boto3
 import botocore
 import logging
-from logging.handlers import RotatingFileHandler
+import time
 import argparse
 import configparser
 import ipaddress
 import subprocess
 
 APP_NAME = "ddr53-client"
-APP_VERSION = "1.0.1"
-CONFIG_FILES = [f"{os.path.dirname(os.path.realpath(__file__))}/ddr53-client.conf", '/etc/ddr53-client.conf', os.path.expanduser('~/.ddr53-client.conf')]
-LOG_ROTATION = {
-    "maxBytes": 500000,
-    "backupCount": 7
+APP_DESCRIPTION = "Route53 Dynamic DNS Client"
+APP_VERSION = "1.1.0"
+CONFIG_FILES = [
+    '/etc/ddr53-client.conf',
+    os.path.expanduser('~/.ddr53-client.conf'),
+    f"{os.path.dirname(os.path.realpath(__file__))}/ddr53-client.conf"
+]
+# Set the log format options
+LOG_FORMAT = {
+"std_format": logging.Formatter(
+    f'%(asctime)s %(levelname)-8s: %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'),
+"debug_format": logging.Formatter(
+    f'%(asctime)s %(levelname)-8s:%(message)s (%(filename)s: %(lineno)d)',
+    datefmt='%Y-%m-%d %H:%M:%S')
+}
+LOG_LEVEL = {
+    "none": {"level": None},
+    "critical": {"level": logging.CRITICAL, "format": LOG_FORMAT["std_format"]},
+    "error": {"level": logging.ERROR, "format": LOG_FORMAT["std_format"]},
+    "warning": {"level": logging.WARNING, "format": LOG_FORMAT["std_format"]},
+    "info": {"level": logging.INFO, "format": LOG_FORMAT["std_format"]},
+    "debug": {"level": logging.DEBUG, "format": LOG_FORMAT["debug_format"]},
 }
 CMD_BLACKLIST = [
     "systemctl",
@@ -41,61 +60,97 @@ CMD_WHITE_LIST = [
     "ifconfig"
 ]
 
+# Signal handler for graceful exit
+def signal_handler(sig, frame):
+    print('Exiting...')
+    sys.exit(0)
+signal.signal(signal.SIGINT, signal_handler)
 
 """ Argument Parsing """
-parser = argparse.ArgumentParser(description="Route53 Dynamic DNS")
+class EnvDefault(argparse.Action):
+    """ Argparse Action that uses ENV Vars for default values """
+
+    def boolify(self, s):
+        if isinstance(s, bool):
+            return s
+        if s.lower() in ['true', 't', 'yes', 'y', '1']:
+            return True
+        if s.lower() in ['false', 'f', 'no', 'n', '0']:
+            return False
+        return s
+
+    def __init__(self, envvar, required=False, default=None, **kwargs):
+        if envvar and envvar in os.environ:
+            default = self.boolify(os.environ[envvar])
+            required = False
+
+        super().__init__(default=default,
+                         required=required,
+                         **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        setattr(namespace, self.dest, values)
+
+parser = argparse.ArgumentParser(description=APP_DESCRIPTION, prog=APP_NAME)
 parser.add_argument(
-    '-c','--config', required=False,
+    '-c', '--config', required=False,
     help=f'Configuration file: INI format. Defaults: {CONFIG_FILES}',
-    default=None
+    metavar=f'{CONFIG_FILES[0]}', default=None, action=EnvDefault, envvar="CONFIG_FILE"
 )
 parser.add_argument(
-    '-l','--log', required=False,
-    help='Log file: Defaults to /var/log/ddr53-client.log',
-    default='/var/log/ddr53-client.log'
+    '--log-file', required=False,
+    help='Log file: Defaults to stdout. ENV Var: LOG_FILE',
+    metavar=f'/var/log/{APP_NAME}.log', default=None, action=EnvDefault, envvar="LOG_FILE"
+)
+parser.add_argument( '--log-level', required=False,
+    help=f'Log level: {", ".join(LOG_LEVEL.keys())}. ENV Var: LOG_LEVEL',
+    metavar='info', default='info', action=EnvDefault, envvar="LOG_LEVEL"
 )
 parser.add_argument(
-    '-v','--verbose', required=False,
-    help='Verbose logging',
-    action='store_true'
-)
-parser.add_argument(
-    '-s','--silent', required=False,
-    help='No console logging',
-    action='store_true'
-)
-parser.add_argument(
-    '-d','--dry-run', required=False,
+    '--dry-run', required=False,
     help='Report only, do not update DNS',
     action='store_true'
 )
-args = parser.parse_args()
-config = configparser.ConfigParser()
-DdnsConfigs = {}
-
-""" Configure Application Logging """
-if not os.path.isdir(os.path.dirname(args.log)):
-    os.mkdir(os.path.dirname(args.log))
-
-logging.basicConfig(
-    handlers=[RotatingFileHandler(args.log, maxBytes=LOG_ROTATION["maxBytes"], backupCount=LOG_ROTATION["backupCount"])],
-    format='%(asctime)s [%(levelname)-1s]: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+parser.add_argument(
+    '-d', '--daemon', required=False,
+    help='Run as a daemon/continuous loop',
+    action='store_true'
 )
-console_format = logging.Formatter(
-    '[%(levelname)-1s]: %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
+parser.add_argument(
+    '-i', '--interval', required=False,
+    help='Daemon loop interval in seconds. ENV Var: DAEMON_INTERVAL', metavar='360',
+    type=int, default=360, action=EnvDefault, envvar="DAEMON_INTERVAL"
 )
-logger = logging.getLogger()
-if not args.silent:
-    console = logging.StreamHandler()
-    console.setFormatter(console_format)
-    logger.addHandler(console)
 
-logger.setLevel(logging.DEBUG) if args.verbose else logger.setLevel(logging.INFO)
-logging.getLogger('botocore').setLevel(logging.CRITICAL)
-logging.getLogger('boto3').setLevel(logging.CRITICAL)
-requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+
+def init_logger():
+    """ Configure Application Logging """
+    if args.log_level == 'none':
+        return None
+    if args.log_level not in LOG_LEVEL.keys():
+        args.log_level = 'info'
+
+    # create the logger
+    app_logger = logging.getLogger()
+    app_logger.setLevel(LOG_LEVEL[args.log_level]["level"])
+
+    # initialize the file logger
+    if args.log_file and not os.path.isdir(os.path.dirname(args.log_file)):
+        os.mkdir(os.path.dirname(args.log_file))
+        file_handler = logging.FileHandler(args.log_file)
+        file_handler.setFormatter(LOG_LEVEL[args.log_level]["format"])
+        app_logger.addHandler(file_handler)
+
+    # initialize the console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(LOG_LEVEL[args.log_level]["format"])
+    app_logger.addHandler(console_handler)
+
+    # Set log level for boto3 and requests
+    logging.getLogger('botocore').setLevel(logging.CRITICAL)
+    logging.getLogger('boto3').setLevel(logging.CRITICAL)
+    requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
+    return app_logger
 
 class SgRule():
     def __init__(self, hostname:str, **kwargs):
@@ -173,37 +228,6 @@ class DdnsConfig():
             if hasattr(self, key):
                 setattr(self, key, self.__str_to_bool__(val))
 
-        # Fetch the public IP address
-        if self.enabled and self.use in ['http', 'cmd']:
-            self.logger.debug(f"Configuring {self.hostname}")
-            if self.use == 'http' and self.http:
-                self.public_ip = self.__http_public_ip__()
-            elif self.use == 'cmd' and self.cmd:
-                self.public_ip = self.__cmd_public_ip__()
-
-            if self.public_ip:
-                self.logger.info(f"Found IP Address: {self.public_ip} for '{self.hostname}' from source: '{self.use}'")
-
-        self.route53 = self.__aws_client__()
-        if not self.route53:
-            self.logger.error("Unable to connect to AWS Route53 API")
-            self.enabled = False
-
-        if self.route53 and self.zoneid and self.hostname:
-            self.dns_public_ip = self.__get_route53_ip__(self.zoneid, self.hostname)
-        if self.dns_public_ip:
-            self.logger.info(f"Found Existing Route53 DNS IP Address: {self.dns_public_ip} for '{self.hostname}'")
-
-        if self.sgroupid and self.sgruleid:
-            self.ec2 = self.__aws_client__('ec2')
-            if not self.ec2:
-                self.logger.error("Unable to connect to AWS EC2 API")
-                self.enabled = False
-            if self.ec2 and self.sgroupid and self.sgruleid:
-                self.sgrule = self.__get_sg_rule__(self.sgroupid, self.sgruleid)
-            if self.sgrule:
-                self.logger.info(f"Found Existing Security Group IP Address: {self.sgrule.ip} for '{self.hostname}'")
-
 
     @property
     def dns_in_sync(self):
@@ -232,7 +256,7 @@ class DdnsConfig():
         else:
             return value
 
-    def __aws_client__(self, client:str='route53'):
+    def __aws_client__(self, client: str='route53'):
         # Create a session object
         credentials = {
             "aws_access_key_id": self.access_key,
@@ -252,7 +276,7 @@ class DdnsConfig():
 
     def __http_public_ip__(self, metadata_token=None):
         """ Get the public IP address from a web service """
-        self.logger.info(f"Getting public IP from HTTP for '{self.hostname}'")
+        self.logger.debug(f"Getting public IP from HTTP for '{self.hostname}'")
         try:
             headers = {"Accept": f"{self.http_accept}"}
             if metadata_token:
@@ -293,7 +317,7 @@ class DdnsConfig():
 
     def __cmd_public_ip__(self):
         """ Get the public IP address from a command """
-        self.logger.info(f"Getting public IP from CMD for '{self.hostname}'")
+        self.logger.debug(f"Getting public IP from CMD for '{self.hostname}'")
         # Verify that the command is safe to run
         run_cmd = self.__validate_cmd__(self.cmd)
         if not run_cmd:
@@ -311,7 +335,7 @@ class DdnsConfig():
 
     def __get_sg_rule__(self, group_id:str, rule_id:str):
         """ Get the public IP address from a security group rule """
-        self.logger.info(f"Getting public IP from Security Group for '{self.hostname}'")
+        self.logger.debug(f"Getting public IP from Security Group for '{self.hostname}'")
         try:
             response = self.ec2.describe_security_group_rules(
                 Filters=[{'Name': 'group-id', 'Values': [group_id]}],
@@ -349,7 +373,7 @@ class DdnsConfig():
 
     def __get_route53_ip__(self, zone_id:str, hostname:str):
         """ Get the public IP address from Route53 """
-        self.logger.info(f"Getting DNS IP from Route53 for {self.hostname}")
+        self.logger.debug(f"Getting DNS IP from Route53 for {self.hostname}")
         dns_public_ip = None
 
         response = self.route53.list_resource_record_sets(
@@ -400,7 +424,60 @@ class DdnsConfig():
             self.logger.error(f"Error updating Route53: {err}")
             return False
 
-    def update(self, dry_run:bool=False):
+    def get_public_ip(self):
+        """ Get the public IP address """
+        if self.enabled and self.use in ['http', 'cmd']:
+            self.logger.debug(f"Configuring {self.hostname}")
+            if self.use == 'http' and self.http:
+                self.public_ip = self.__http_public_ip__()
+            elif self.use == 'cmd' and self.cmd:
+                self.public_ip = self.__cmd_public_ip__()
+
+            if self.public_ip:
+                self.logger.debug(f"Found IP Address: {self.public_ip} for '{self.hostname}' from source: '{self.use}'")
+
+    def get_dns_ip(self):
+        """ Get the public IP address from Route53 """
+        if self.route53 and self.zoneid and self.hostname:
+            self.dns_public_ip = self.__get_route53_ip__(self.zoneid, self.hostname)
+        if self.dns_public_ip:
+            self.logger.debug(f"Found Existing Route53 DNS IP Address: {self.dns_public_ip} for '{self.hostname}'")
+
+    def get_sg_rule(self):
+        """ Get the public IP address from a security group rule """
+        self.ec2 = self.__aws_client__('ec2')
+        if not self.ec2:
+            self.logger.error("Unable to connect to AWS EC2 API")
+            self.enabled = False
+
+        if self.ec2 and self.sgroupid and self.sgruleid:
+            self.sgrule = self.__get_sg_rule__(self.sgroupid, self.sgruleid)
+        if self.sgrule:
+            self.logger.debug(f"Found Existing Security Group IP Address: {self.sgrule.ip} for '{self.hostname}'")
+    @property
+    def update_needed(self):
+        self.route53 = self.__aws_client__()
+        if not self.route53:
+            self.logger.error("Unable to connect to AWS Route53 API")
+            self.enabled = False
+
+        self.get_public_ip()
+        self.get_dns_ip()
+        self.get_sg_rule()
+
+        if not self.enabled:
+            return False
+
+        if self.public_ip != self.dns_public_ip:
+            self.logger.debug(f"Public IP for {self.hostname} is out of sync with DNS. Update needed.")
+            return True
+        elif self.sgrule and self.public_ip != self.sgrule.ip:
+            self.logger.debug(f"Public IP for {self.hostname} is out of sync with {self.sgroupid}. Update needed.")
+            return True
+        else:
+            return False
+
+    def update(self, dry_run: bool=False):
         # Update the DNS record if needed
         if self.ready and not self.dns_in_sync:
             self.logger.info(f"Updating DNS for {self.hostname} to {self.public_ip}")
@@ -420,38 +497,54 @@ class DdnsConfig():
         else:
             self.logger.info(f"Public IP for {self.hostname} is in sync with {self.sgroupid}. No update needed.")
 
+def run():
+    """ Main execution function """
+    # Load the configuration file
+    if args.config:
+        CONFIG_FILES.insert(0, args.config)
+    for config_file in CONFIG_FILES:
+        logger.debug(f"Checking for configuration file: {config_file}")
+        if os.path.isfile(config_file):
+            logger.debug(f"Loading configuration from {config_file}")
+            config.read(config_file)
+            for hostname in config.sections():
+                DdnsConfigs[f"{hostname}"] = DdnsConfig(hostname=hostname, config_entry=config[hostname],
+                                                        config_defaults=config['DEFAULT'])
+            break
+    if len(DdnsConfigs) == 0:
+        logger.error("No configuration found. Exiting.")
+        sys.exit(1)
 
+    """ Run each config entry and update DNS if needed """
+    for hostname, ddns_config in DdnsConfigs.items():
+        # Use the public IP from another hostname if specified and found
+        if ddns_config.use in DdnsConfigs.keys() and DdnsConfigs[ddns_config.use].public_ip:
+            ddns_config.public_ip = DdnsConfigs[ddns_config.use].public_ip
 
+        if not ddns_config.enabled:
+            continue
+        if not ddns_config.update_needed:
+            logger.info(f"DNS for {hostname} ({ddns_config.public_ip}) is in sync. No update needed.")
+            continue
 
+        ddns_config.update(dry_run=args.dry_run)
 
+""" Main Application Loop """
+if __name__ == "__main__":
+    args = parser.parse_args()
+    config = configparser.ConfigParser()
+    DdnsConfigs = {}
+    logger = init_logger()
 
-logger.info(f"** Starting {APP_NAME} version {APP_VERSION} **")
+    logger.info(f"** Starting {APP_NAME} version {APP_VERSION} **")
+    if not args.daemon:
+        run()
+        sys.exit(0)
 
-""" Load the configuration file """
-if args.config:
-    CONFIG_FILES.insert(0, args.config)
-for config_file in CONFIG_FILES:
-    logger.debug(f"Checking for configuration file: {config_file}")
-    if os.path.isfile(config_file):
-        logger.info(f"Loading configuration from {config_file}")
-        config.read(config_file)
-        for hostname in config.sections():
-            DdnsConfigs[f"{hostname}"] = DdnsConfig(hostname=hostname, config_entry=config[hostname], config_defaults=config['DEFAULT'])
-        break
-if len(DdnsConfigs) == 0:
-    logger.error("No configuration found. Exiting.")
-    exit(1)
+    logger.info(f"Running as a daemon with interval of {args.interval} seconds")
+    while True:
+        run()
+        logger.debug(f"Sleeping for {args.interval} seconds")
+        time.sleep(args.interval)
 
-
-""" Run each config entry and update DNS if needed """
-for hostname, ddns_config in DdnsConfigs.items():
-    # skip disabled configs
-    if not ddns_config.enabled:
-        continue
-
-    # Use the public IP from another hostname if specified and found
-    if ddns_config.use in DdnsConfigs.keys() and DdnsConfigs[ddns_config.use].public_ip:
-        ddns_config.public_ip = DdnsConfigs[ddns_config.use].public_ip
-
-    ddns_config.update(dry_run=args.dry_run)
 

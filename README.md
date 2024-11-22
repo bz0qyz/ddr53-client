@@ -7,9 +7,10 @@ Optionally, it can be used to update a security group rule with the new IP addre
 
 ### Arguments
   - `-c|--config`: The path to the configuration file. Defaults to `/etc/ddr53/ddr53.conf`.
-  - `-l|--log`: The path to the log file. Defaults to `/var/log/ddr53/ddr53.log`.
-  - `-v|--verbose`: Enable verbose output.
-  - `-q|--quiet`: Disable all output. Logging will still be enabled.
+  - `--log-file`: The path to the log file. Defaults to `stdout. Environment variable: `LOG_FILE`.
+  - `--log-level`: Set the log level. Defaults to `info`. options: `none`, `debug`, `info`, `warning`, `error`, `critical`. Environment variable: `LOG_LEVEL`.
+  - `-d|--daemon`: Run in daemon mode.
+  - `-i|--interval`: The interval in seconds to wait between updates. Defaults to 360 seconds. Environment variable: `DAEMON_INTERVAL`.
   - `-h|--help`: Show the help message and exit.
 
 ## Configuration

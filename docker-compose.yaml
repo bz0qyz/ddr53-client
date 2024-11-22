@@ -1,0 +1,11 @@
+services:
+    ddr53-client:
+      build: .
+      image: ddr53-client:latest
+      container_name: ddr53-client
+      restart: unless-stopped
+      volumes:
+        - ./ddr53-client.conf:/etc/ddr53-client.conf
+      environment:
+        - DAEMON_INTERVAL=30
+
