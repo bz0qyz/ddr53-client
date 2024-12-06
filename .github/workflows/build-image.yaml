@@ -1,0 +1,47 @@
+name: Build and Create Image
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag name for the Docker image (e.g., v1.0.0)'
+        required: true
+        default: 'latest'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  createimage:
+    name: Create OCI Image
+    runs-on: ubuntu-latest
+    steps:
+      # Checkout the repository
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      # Log in to GitHub Container Registry with a token
+      - name: Log in to GitHub Container Registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # Determine the Docker image tag
+      - name: Set Docker Tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+           echo "TAG=${GITHUB_REF##*/}" >> $GITHUB_ENV
+          else
+           echo "TAG=${{ github.event.inputs.tag }}" >> $GITHUB_ENV
+          fi
+
+      # Build the Docker image
+      - name: Build Docker Image
+        run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/${{ github.repository }}:${{ env.TAG }} .
+
+      # Push the Docker image to GitHub Container Registry
+      - name: Push Docker Image
+        run: |
+          docker push ghcr.io/${{ github.repository_owner }}/${{ github.repository }}:${{ env.TAG }}

@@ -94,8 +94,8 @@ class EnvDefault(argparse.Action):
 parser = argparse.ArgumentParser(description=APP_DESCRIPTION, prog=APP_NAME)
 parser.add_argument(
     '-c', '--config', required=False,
-    help=f'Configuration file: INI format. Defaults: {CONFIG_FILES}',
-    metavar=f'{CONFIG_FILES[0]}', default=None, action=EnvDefault, envvar="CONFIG_FILE"
+    help=f'Configuration file: INI format. Default: {CONFIG_FILES[0]}. ENV Var: CONFIG_FILE',
+    metavar=f'{CONFIG_FILES[0]}', default=f'{CONFIG_FILES[0]}', action=EnvDefault, envvar="CONFIG_FILE"
 )
 parser.add_argument(
     '--log-file', required=False,
