@@ -16,7 +16,7 @@ import subprocess
 
 APP_NAME = "ddr53-client"
 APP_DESCRIPTION = "Route53 Dynamic DNS Client"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.1.1"
 CONFIG_FILES = [
     '/etc/ddr53-client.conf',
     os.path.expanduser('~/.ddr53-client.conf'),
@@ -481,18 +481,18 @@ class DdnsConfig():
         # Update the DNS record if needed
         if self.ready and not self.dns_in_sync:
             self.logger.info(f"Updating DNS for {self.hostname} to {self.public_ip}")
-            if ddns_config.__set_route53_ip__(self.zoneid, self.hostname, self.public_ip, dry_run=dry_run):
+            if self.__set_route53_ip__(self.zoneid, self.hostname, self.public_ip, dry_run=dry_run):
                 self.logger.info(f"DNS for {self.hostname} successfully updated to {self.public_ip}")
         else:
             self.logger.info(f"Public IP for {self.hostname} is in sync with DNS. No update needed.")
 
         # Update the Security Group rule if needed
-        if ddns_config.sg_in_sync == None:
+        if self.sg_in_sync == None:
             self.logger.debug(f"No security group rule configured to update for {self.hostname}")
 
-        elif ddns_config.ready and not ddns_config.sg_in_sync:
+        elif self.ready and not self.sg_in_sync:
             self.logger.info(f"Updating Security Group for {self.hostname} to {self.public_ip}")
-            if ddns_config.__set_sg_rule_ip__(self.sgroupid, self.sgruleid, f"{self.public_ip}", dry_run=dry_run):
+            if self.__set_sg_rule_ip__(self.sgroupid, self.sgruleid, f"{self.public_ip}", dry_run=dry_run):
                 self.logger.info(f"Security Group for {self.hostname} successfully updated to {self.public_ip}")
         else:
             self.logger.info(f"Public IP for {self.hostname} is in sync with {self.sgroupid}. No update needed.")

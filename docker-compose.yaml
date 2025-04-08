@@ -1,7 +1,6 @@
 services:
     ddr53-client:
-      build: .
-      image: ddr53-client:latest
+      image: ghcr.io/bz0qyz/bz0qyz/ddr53-client:v1.1.1
       container_name: ddr53-client
       restart: unless-stopped
       volumes:
