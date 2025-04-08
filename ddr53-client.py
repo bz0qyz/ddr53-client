@@ -216,7 +216,7 @@ class DdnsConfig():
         self.json_key = None
         self.public_ip = None
         self.dns_public_ip = None
-        self.logger = logging.getLogger(__name__)
+        self._logger = logging.getLogger(__name__)
 
         # Set default values
         for key, val in config_defaults.items():
@@ -268,56 +268,56 @@ class DdnsConfig():
         try:
             sts.get_caller_identity()
         except exception as err:
-            self.logger.error(f"Unable to authenticate AWS session. Check your credentials. {err}")
+            self._logger.error(f"Unable to authenticate AWS session. Check your credentials. {err}")
             return None
 
-        self.logger.debug(f"Connected to AWS API using client: {client}")
+        self._logger.debug(f"Connected to AWS API using client: {client}")
         return session.client(client)
 
     def __http_public_ip__(self, metadata_token=None):
         """ Get the public IP address from a web service """
-        self.logger.debug(f"Getting public IP from HTTP for '{self.hostname}'")
+        self._logger.debug(f"Getting public IP from HTTP for '{self.hostname}'")
         try:
             headers = {"Accept": f"{self.http_accept}"}
             if metadata_token:
-                self.logger.debug("Using ec2 metadata token")
+                self._logger.debug("Using ec2 metadata token")
                 headers["X-aws-ec2-metadata-token"] = metadata_token
             response = requests.get(self.http, headers=headers, verify=True)
 
             if response.status_code == 401 and self.http.startswith('http://169.254.169.254') and not metadata_token:
-                self.logger.debug("Requesting ec2 metadata token")
+                self._logger.debug("Requesting ec2 metadata token")
                 metadata_token = requests.put("http://169.254.169.254/latest/api/token", headers={"X-aws-ec2-metadata-token-ttl-seconds": "21600"}, verify=True)
                 return self.__http_public_ip__(metadata_token=metadata_token.text)
             elif response.status_code == 200:
                 if self.http_accept.endswith('json') and self.json_key:
-                    self.logger.debug("Parsing HTTP JSON response")
+                    self._logger.debug("Parsing HTTP JSON response")
                     return str(ipaddress.ip_address(response.json()[self.json_key]))
                 else:
-                    self.logger.debug("Parsing HTTP text response")
+                    self._logger.debug("Parsing HTTP text response")
                     return str(ipaddress.ip_address(response.text))
 
-            self.logger.debug(f"Public IP: {self.public_ip}")
+            self._logger.debug(f"Public IP: {self.public_ip}")
         except ValueError as err:
-            self.logger.error(f"Error getting public IP: {err}")
+            self._logger.error(f"Error getting public IP: {err}")
             return None
 
     def __validate_cmd__(self, command:str):
         """ Validate a command string """
         # Verify that the cmd is whitelisted
         if command and not any([cmd in command for cmd in CMD_WHITE_LIST]):
-            self.logger.error(f"Command '{command}' is not whitelisted. Exiting.")
+            self._logger.error(f"Command '{command}' is not whitelisted. Exiting.")
             return None
 
         # Verify that the cmd is not blacklisted
         if command and any([cmd in command for cmd in CMD_BLACKLIST]):
-            self.logger.error(f"Command '{command}' is blacklisted. Exiting.")
+            self._logger.error(f"Command '{command}' is blacklisted. Exiting.")
             return None
 
         return command
 
     def __cmd_public_ip__(self):
         """ Get the public IP address from a command """
-        self.logger.debug(f"Getting public IP from CMD for '{self.hostname}'")
+        self._logger.debug(f"Getting public IP from CMD for '{self.hostname}'")
         # Verify that the command is safe to run
         run_cmd = self.__validate_cmd__(self.cmd)
         if not run_cmd:
@@ -328,14 +328,14 @@ class DdnsConfig():
             if response.returncode == 0:
                 return str(ipaddress.ip_address(response.stdout.decode('utf-8').strip()))
             else:
-                self.logger.debug(f"Public IP: {self.public_ip}")
+                self._logger.debug(f"Public IP: {self.public_ip}")
         except ValueError as err:
-            self.logger.error(f"Error getting public IP: {err}")
+            self._logger.error(f"Error getting public IP: {err}")
             return None
 
     def __get_sg_rule__(self, group_id:str, rule_id:str):
         """ Get the public IP address from a security group rule """
-        self.logger.debug(f"Getting public IP from Security Group for '{self.hostname}'")
+        self._logger.debug(f"Getting public IP from Security Group for '{self.hostname}'")
         try:
             response = self.ec2.describe_security_group_rules(
                 Filters=[{'Name': 'group-id', 'Values': [group_id]}],
@@ -344,19 +344,18 @@ class DdnsConfig():
             if response["SecurityGroupRules"] and len(response["SecurityGroupRules"]) > 0:
                 return SgRule(hostname=self.hostname, **response["SecurityGroupRules"][0])
         except botocore.exceptions.ClientError as err:
-            self.logger.error(f"Error getting public IP from Security Group: {err}")
-            return None
+            raise ValueError(f"Error getting public IP from Security Group: {err}")
         except ValueError as err:
-            self.logger.error(f"Error getting public IP from Security Group: {err}")
-            return None
+            raise ValueError(f"Error getting public IP from Security Group: {err}")
+
 
     def __set_sg_rule_ip__(self, group_id:str, rule_id:str, public_ip:str, dry_run:bool=False):
         """ Set the public IP address in a security group rule """
         if dry_run:
-            self.logger.info(f"DRY RUN: Updating Security Group for {self.hostname} to {self.public_ip}")
+            self._logger.info(f"DRY RUN: Updating Security Group for {self.hostname} to {self.public_ip}")
             return True
 
-        self.logger.info(f"Setting public IP in Security Group for '{self.hostname}'")
+        self._logger.info(f"Setting public IP in Security Group for '{self.hostname}'")
         self.sgrule.ip = public_ip
 
         try:
@@ -367,33 +366,35 @@ class DdnsConfig():
             )
             return True
         except botocore.exceptions.ClientError as err:
-            self.logger.error(f"Error updating Security Group: {err}")
-            return False
+            raise ValueError(f"Error updating Security Group: {err}")
 
 
     def __get_route53_ip__(self, zone_id:str, hostname:str):
         """ Get the public IP address from Route53 """
-        self.logger.debug(f"Getting DNS IP from Route53 for {self.hostname}")
+        self._logger.debug(f"Getting DNS IP from Route53 for {self.hostname}")
         dns_public_ip = None
 
-        response = self.route53.list_resource_record_sets(
-            HostedZoneId=zone_id,
-            StartRecordName=hostname,
-            StartRecordType='A',
-            MaxItems='1'
-        )
-        # Check if the response contains the hostname
-        if "ResourceRecordSets" in response and len(response["ResourceRecordSets"]) > 0:
-            for recordset in response["ResourceRecordSets"]:
-                if recordset["Name"] in [hostname, f"{hostname}."]:
-                    dns_public_ip = recordset["ResourceRecords"][0]["Value"]
-                    break
-        return dns_public_ip
+        try:
+            response = self.route53.list_resource_record_sets(
+                HostedZoneId=zone_id,
+                StartRecordName=hostname,
+                StartRecordType='A',
+                MaxItems='1'
+            )
+            # Check if the response contains the hostname
+            if "ResourceRecordSets" in response and len(response["ResourceRecordSets"]) > 0:
+                for recordset in response["ResourceRecordSets"]:
+                    if recordset["Name"] in [hostname, f"{hostname}."]:
+                        dns_public_ip = recordset["ResourceRecords"][0]["Value"]
+                        break
+            return dns_public_ip
+        except Exception as err:
+            raise ValueError(f"Error getting DNS IP from Route53: {err}")
 
     def __set_route53_ip__(self, zone_id:str, hostname:str, public_ip:str, dry_run:bool=False):
         """ Set the public IP address in Route53 """
         if dry_run:
-            self.logger.info(f"DRY RUN: Updating DNS for {self.hostname} to {self.public_ip}")
+            self._logger.info(f"DRY RUN: Updating DNS for {self.hostname} to {self.public_ip}")
             return True
 
         try:
@@ -418,47 +419,53 @@ class DdnsConfig():
                     ]
                 }
             )
-            return True if response.status_code == 200 else False
+
+            if "ResponseMetadata" not in response or not "HTTPStatusCode" in response["ResponseMetadata"]:
+                raise ValueError("Error updating Route53: No HTTPStatusCode in response")
+            if response["ResponseMetadata"]["HTTPStatusCode"] not in [200, 201, 203]:
+                raise ValueError(f"Error updating Route53. Return Code: {response['ResponseMetadata']['HTTPStatusCode']}")
+
+            return True
 
         except Exception as err:
-            self.logger.error(f"Error updating Route53: {err}")
+            self._logger.error(f"Error updating Route53: {err}")
             return False
 
     def get_public_ip(self):
         """ Get the public IP address """
         if self.enabled and self.use in ['http', 'cmd']:
-            self.logger.debug(f"Configuring {self.hostname}")
+            self._logger.debug(f"Configuring {self.hostname}")
             if self.use == 'http' and self.http:
                 self.public_ip = self.__http_public_ip__()
             elif self.use == 'cmd' and self.cmd:
                 self.public_ip = self.__cmd_public_ip__()
 
             if self.public_ip:
-                self.logger.debug(f"Found IP Address: {self.public_ip} for '{self.hostname}' from source: '{self.use}'")
+                self._logger.debug(f"Found IP Address: {self.public_ip} for '{self.hostname}' from source: '{self.use}'")
 
     def get_dns_ip(self):
         """ Get the public IP address from Route53 """
         if self.route53 and self.zoneid and self.hostname:
             self.dns_public_ip = self.__get_route53_ip__(self.zoneid, self.hostname)
         if self.dns_public_ip:
-            self.logger.debug(f"Found Existing Route53 DNS IP Address: {self.dns_public_ip} for '{self.hostname}'")
+            self._logger.debug(f"Found Existing Route53 DNS IP Address: {self.dns_public_ip} for '{self.hostname}'")
 
     def get_sg_rule(self):
         """ Get the public IP address from a security group rule """
         self.ec2 = self.__aws_client__('ec2')
         if not self.ec2:
-            self.logger.error("Unable to connect to AWS EC2 API")
+            self._logger.error("Unable to connect to AWS EC2 API")
             self.enabled = False
 
         if self.ec2 and self.sgroupid and self.sgruleid:
             self.sgrule = self.__get_sg_rule__(self.sgroupid, self.sgruleid)
         if self.sgrule:
-            self.logger.debug(f"Found Existing Security Group IP Address: {self.sgrule.ip} for '{self.hostname}'")
+            self._logger.debug(f"Found Existing Security Group IP Address: {self.sgrule.ip} for '{self.hostname}'")
     @property
     def update_needed(self):
         self.route53 = self.__aws_client__()
         if not self.route53:
-            self.logger.error("Unable to connect to AWS Route53 API")
+            self._logger.error("Unable to connect to AWS Route53 API")
             self.enabled = False
 
         self.get_public_ip()
@@ -469,10 +476,10 @@ class DdnsConfig():
             return False
 
         if self.public_ip != self.dns_public_ip:
-            self.logger.debug(f"Public IP for {self.hostname} is out of sync with DNS. Update needed.")
+            self._logger.debug(f"Public IP for {self.hostname} is out of sync with DNS. Update needed.")
             return True
         elif self.sgrule and self.public_ip != self.sgrule.ip:
-            self.logger.debug(f"Public IP for {self.hostname} is out of sync with {self.sgroupid}. Update needed.")
+            self._logger.debug(f"Public IP for {self.hostname} is out of sync with {self.sgroupid}. Update needed.")
             return True
         else:
             return False
@@ -480,22 +487,22 @@ class DdnsConfig():
     def update(self, dry_run: bool=False):
         # Update the DNS record if needed
         if self.ready and not self.dns_in_sync:
-            self.logger.info(f"Updating DNS for {self.hostname} to {self.public_ip}")
+            self._logger.info(f"Updating DNS for {self.hostname} to {self.public_ip}")
             if self.__set_route53_ip__(self.zoneid, self.hostname, self.public_ip, dry_run=dry_run):
-                self.logger.info(f"DNS for {self.hostname} successfully updated to {self.public_ip}")
+                self._logger.info(f"DNS for {self.hostname} successfully updated to {self.public_ip}")
         else:
-            self.logger.info(f"Public IP for {self.hostname} is in sync with DNS. No update needed.")
+            self._logger.info(f"Public IP for {self.hostname} is in sync with DNS. No update needed.")
 
         # Update the Security Group rule if needed
         if self.sg_in_sync == None:
-            self.logger.debug(f"No security group rule configured to update for {self.hostname}")
+            self._logger.debug(f"No security group rule configured to update for {self.hostname}")
 
         elif self.ready and not self.sg_in_sync:
-            self.logger.info(f"Updating Security Group for {self.hostname} to {self.public_ip}")
+            self._logger.info(f"Updating Security Group for {self.hostname} to {self.public_ip}")
             if self.__set_sg_rule_ip__(self.sgroupid, self.sgruleid, f"{self.public_ip}", dry_run=dry_run):
-                self.logger.info(f"Security Group for {self.hostname} successfully updated to {self.public_ip}")
+                self._logger.info(f"Security Group for {self.hostname} successfully updated to {self.public_ip}")
         else:
-            self.logger.info(f"Public IP for {self.hostname} is in sync with {self.sgroupid}. No update needed.")
+            self._logger.info(f"Public IP for {self.hostname} is in sync with {self.sgroupid}. No update needed.")
 
 def run():
     """ Main execution function """
@@ -523,11 +530,21 @@ def run():
 
         if not ddns_config.enabled:
             continue
-        if not ddns_config.update_needed:
-            logger.info(f"DNS for {hostname} ({ddns_config.public_ip}) is in sync. No update needed.")
-            continue
+        try:
+            if not ddns_config.update_needed:
+                logger.info(f"DNS for {hostname} ({ddns_config.public_ip}) is in sync. No update needed.")
+                continue
+        except Exception as err:
+            logger.error(f"Error checking for updates with {hostname}: {err}")
+            return False
 
-        ddns_config.update(dry_run=args.dry_run)
+        try:
+            ddns_config.update(dry_run=args.dry_run)
+        except Exception as err:
+            logger.error(f"Error updating DNS for {hostname}: {err}")
+            return False
+    return True
+
 
 """ Main Application Loop """
 if __name__ == "__main__":
@@ -538,8 +555,12 @@ if __name__ == "__main__":
 
     logger.info(f"** Starting {APP_NAME} version {APP_VERSION} **")
     if not args.daemon:
-        run()
-        sys.exit(0)
+        success = run()
+        if not success:
+            logger.error("Error running the application. Exiting.")
+            sys.exit(1)
+        else:
+            sys.exit(0)
 
     logger.info(f"Running as a daemon with interval of {args.interval} seconds")
     while True:
